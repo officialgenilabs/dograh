@@ -1014,10 +1014,13 @@ def create_llm_service_from_provider(
     elif provider == ServiceProviders.AZURE.value:
         if endpoint:
             _validate_runtime_service_url(endpoint, "endpoint")
+        settings_kwargs = {"model": model}
+        if "gpt-5" not in model.lower():
+            settings_kwargs["temperature"] = 0.1
         return AzureLLMService(
             api_key=api_key,
             endpoint=endpoint,
-            settings=AzureLLMSettings(model=model, temperature=0.1),
+            settings=AzureLLMSettings(**settings_kwargs),
         )
     elif provider == ServiceProviders.DOGRAH.value:
         return DograhLLMService(
