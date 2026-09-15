@@ -121,6 +121,12 @@ class UserConfigurationValidator:
 
         provider = service_config.provider
 
+        # External references are structurally/provider validated by the model and
+        # are deliberately not resolved during configuration writes. Runtime
+        # materialization performs the authoritative Key Vault check and fails closed.
+        if getattr(service_config, "credential_source", "inline") == "secret_ref":
+            return []
+
         for url_field in ("base_url", "endpoint"):
             url = getattr(service_config, url_field, None)
             if url:

@@ -37,6 +37,8 @@ def check_for_masked_keys(config: "EffectiveAIModelConfiguration") -> None:
         service = getattr(config, field, None)
         if service is None:
             continue
+        if getattr(service, "credential_source", "inline") == "secret_ref":
+            continue
         for secret_field in SERVICE_SECRET_FIELDS:
             if not hasattr(service, secret_field):
                 continue
@@ -121,6 +123,9 @@ def _mask_service(service_cfg: Optional[ServiceConfig]) -> Optional[Dict[str, An
 
     # Work on a dict copy so we don't mutate original models
     data = service_cfg.model_dump()
+    if data.get("credential_source") == "secret_ref":
+        data.pop("api_key", None)
+        data["credential_configured"] = True
     for secret_field in SERVICE_SECRET_FIELDS:
         if secret_field not in data or not data[secret_field]:
             continue
@@ -170,6 +175,9 @@ def mask_workflow_configurations(config: Optional[Dict]) -> Optional[Dict]:
 
 def _mask_nested_service_secrets(value):
     if isinstance(value, dict):
+        if value.get("credential_source") == "secret_ref":
+            value.pop("api_key", None)
+            value["credential_configured"] = True
         for key, nested in list(value.items()):
             if key in SERVICE_SECRET_FIELDS and nested:
                 value[key] = _mask_secret_value(nested)

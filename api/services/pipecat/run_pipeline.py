@@ -651,6 +651,16 @@ async def _run_pipeline_impl(
     else:
         user_config = resolved_user_config
 
+    # Resolve external provider credentials only at the runtime construction
+    # boundary. The returned copy keeps values in private attributes and can
+    # never serialize them into workflow or organization persistence payloads.
+    from api.services.secrets.runtime import materialize_runtime_secrets
+
+    user_config = await materialize_runtime_secrets(
+        user_config,
+        organization_id=workflow.organization_id,
+    )
+
     workflow_graph = WorkflowGraph(
         ReactFlowDTO.model_validate(run_workflow_json),
         skip_instance_constraints_for={"trigger"},

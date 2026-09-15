@@ -364,6 +364,12 @@ def _merge_byok_secret_fields(incoming_byok: dict | None, existing_byok: dict | 
 
 
 def _merge_service_secret_fields(incoming: dict, existing: dict):
+    # Selecting an external reference is an explicit custody transition. Never
+    # copy a legacy inline value into that configuration, even when the provider
+    # is unchanged.
+    if incoming.get("credential_source") == "secret_ref":
+        incoming.pop("api_key", None)
+        return
     if (
         incoming.get("provider") is not None
         and existing.get("provider") is not None
@@ -400,6 +406,9 @@ def _raise_if_masked_secret(value):
 
 def _mask_secret_fields(value):
     if isinstance(value, dict):
+        if value.get("credential_source") == "secret_ref":
+            value.pop("api_key", None)
+            value["credential_configured"] = True
         for key, nested in list(value.items()):
             if key in SERVICE_SECRET_FIELDS and nested:
                 value[key] = _mask_secret_value(nested)

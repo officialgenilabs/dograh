@@ -153,6 +153,13 @@ async def process_knowledge_base_document(
                 organization_id=document.organization_id,
             )
             effective_config = resolved_config.effective
+            from api.services.secrets.runtime import materialize_runtime_secrets
+
+            effective_config = await materialize_runtime_secrets(
+                effective_config,
+                organization_id=document.organization_id,
+                sections=("embeddings",),
+            )
             if effective_config.embeddings:
                 embeddings_provider = getattr(
                     effective_config.embeddings, "provider", None

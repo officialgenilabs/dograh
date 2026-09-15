@@ -468,6 +468,14 @@ async def execute_text_chat_pending_turn(
     if user_config.llm is None:
         raise ValueError("Text chat requires an LLM configuration")
 
+    from api.services.secrets.runtime import materialize_runtime_secrets
+
+    user_config = await materialize_runtime_secrets(
+        user_config,
+        organization_id=workflow.organization_id,
+        sections=("llm", "embeddings"),
+    )
+
     workflow_graph = WorkflowGraph(
         ReactFlowDTO.model_validate(run_definition.workflow_json),
         skip_instance_constraints_for={"trigger"},

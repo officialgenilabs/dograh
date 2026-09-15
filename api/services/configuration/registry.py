@@ -3,7 +3,16 @@ from collections.abc import Iterable
 from enum import Enum, auto
 from typing import Annotated, Dict, Literal, Type, TypeVar, Union
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    SecretStr,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 from api.services.configuration.options import (
     AZURE_EMBEDDING_MODELS,
@@ -54,6 +63,8 @@ from api.services.configuration.options import (
     SPEECHMATICS_STT_LANGUAGES,
 )
 from api.services.configuration.options.google import GOOGLE_VERTEX_MODELS
+from api.services.secrets.errors import SecretReferenceInvalidError
+from api.services.secrets.reference import SecretReference
 
 
 class ServiceType(Enum):
@@ -132,20 +143,80 @@ class BaseServiceConfiguration(BaseModel):
         ServiceProviders.XAI,
         ServiceProviders.LMNT,
     ]
-    api_key: str | list[str]
+    api_key: str | list[str] | None
+    credential_source: Literal["inline", "secret_ref"] = "inline"
+    secret_ref: SecretReference | None = None
+    _resolved_api_key: SecretStr | None = PrivateAttr(default=None)
+
+    @model_validator(mode="before")
+    @classmethod
+    def allow_omitted_api_key_for_external_reference(cls, data):
+        if (
+            isinstance(data, dict)
+            and data.get("credential_source") == "secret_ref"
+            and "api_key" not in data
+        ):
+            data = dict(data)
+            data["api_key"] = None
+        return data
 
     @field_validator("api_key")
     @classmethod
     def validate_api_key(cls, v):
-        if v is None:
-            return v
         if isinstance(v, list) and len(v) == 0:
             raise ValueError("api_key list must not be empty")
         return v
 
+    @model_validator(mode="after")
+    def validate_credential_source(self):
+        raw_api_key = self.__dict__.get("api_key")
+        if self.credential_source == "secret_ref":
+            if self.secret_ref is None:
+                raise ValueError("secret_ref is required for external credentials")
+            if raw_api_key not in (None, "", []):
+                raise ValueError(
+                    "api_key must be absent when credential_source is secret_ref"
+                )
+            provider = (
+                self.provider.value
+                if hasattr(self.provider, "value")
+                else str(self.provider)
+            )
+            if self.secret_ref.provider_namespace != provider:
+                raise ValueError(
+                    "secret_ref provider namespace does not match provider"
+                )
+        elif self.secret_ref is not None:
+            raise ValueError("secret_ref requires credential_source=secret_ref")
+        return self
+
+    def bind_resolved_api_key(self, value: str) -> None:
+        """Bind one runtime-only value without modifying serializable fields."""
+        if self.credential_source != "secret_ref" or not value:
+            raise SecretReferenceInvalidError(
+                provider=(
+                    self.provider.value
+                    if hasattr(self.provider, "value")
+                    else str(self.provider)
+                )
+            )
+        self._resolved_api_key = SecretStr(value)
+
     def __getattribute__(self, name: str):
         if name == "api_key":
-            value = super().__getattribute__(name)
+            fields = object.__getattribute__(self, "__dict__")
+            credential_source = fields.get("credential_source", "inline")
+            if credential_source == "secret_ref":
+                private = object.__getattribute__(self, "__pydantic_private__") or {}
+                resolved = private.get("_resolved_api_key")
+                if resolved is None:
+                    provider = fields.get("provider")
+                    provider_value = (
+                        provider.value if hasattr(provider, "value") else str(provider)
+                    )
+                    raise SecretReferenceInvalidError(provider=provider_value)
+                return resolved.get_secret_value()
+            value = fields.get("api_key")
             if value is None:
                 return value
             if isinstance(value, list):
@@ -154,8 +225,10 @@ class BaseServiceConfiguration(BaseModel):
         return super().__getattribute__(name)
 
     def get_all_api_keys(self) -> list[str]:
-        """Get all API keys as a list (bypasses random selection)."""
-        value = super().__getattribute__("api_key")
+        """Get all API keys while preserving external-reference fail-closed behavior."""
+        if self.credential_source == "secret_ref":
+            return [self.api_key]
+        value = object.__getattribute__(self, "__dict__").get("api_key")
         if value is None:
             return []
         if isinstance(value, list):

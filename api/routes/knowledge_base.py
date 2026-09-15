@@ -380,6 +380,13 @@ async def search_chunks(
             organization_id=user.selected_organization_id,
         )
         effective_config = resolved_config.effective
+        from api.services.secrets.runtime import materialize_runtime_secrets
+
+        effective_config = await materialize_runtime_secrets(
+            effective_config,
+            organization_id=user.selected_organization_id,
+            sections=("embeddings",),
+        )
         embeddings_api_key = None
         embeddings_model = None
         embeddings_provider = None

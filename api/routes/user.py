@@ -114,12 +114,22 @@ async def get_auth_user(
     }
 
 
+ServiceConfigurationValue = Union[
+    str,
+    float,
+    bool,
+    list[str],
+    dict[str, str],
+    None,
+]
+
+
 class UserConfigurationRequestResponseSchema(BaseModel):
-    llm: dict[str, Union[str, float, list[str], None]] | None = None
-    tts: dict[str, Union[str, float, list[str], None]] | None = None
-    stt: dict[str, Union[str, float, list[str], None]] | None = None
-    embeddings: dict[str, Union[str, float, list[str], None]] | None = None
-    realtime: dict[str, Union[str, float, list[str], None]] | None = None
+    llm: dict[str, ServiceConfigurationValue] | None = None
+    tts: dict[str, ServiceConfigurationValue] | None = None
+    stt: dict[str, ServiceConfigurationValue] | None = None
+    embeddings: dict[str, ServiceConfigurationValue] | None = None
+    realtime: dict[str, ServiceConfigurationValue] | None = None
     is_realtime: bool | None = None
     test_phone_number: str | None = None
     timezone: str | None = None

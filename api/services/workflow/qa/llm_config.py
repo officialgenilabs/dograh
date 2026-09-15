@@ -66,6 +66,14 @@ async def create_qa_llm_service(
     if user_configuration.llm is None:
         return None
 
+    from api.services.secrets.runtime import materialize_runtime_secrets
+
+    user_configuration = await materialize_runtime_secrets(
+        user_configuration,
+        organization_id=workflow_run.workflow.organization_id,
+        sections=("llm",),
+    )
+
     model_override = (
         qa_data.qa_model if qa_data.qa_model and qa_data.qa_model != "default" else None
     )

@@ -43,6 +43,12 @@ def _merge_service_secret_fields(
     if not _same_provider(incoming_cfg, existing_cfg):
         return incoming_cfg
 
+    # An explicit move to external custody must never inherit a legacy inline
+    # value. Rollback to inline custody likewise requires an explicit real key.
+    if incoming_cfg.get("credential_source") == "secret_ref":
+        incoming_cfg.pop("api_key", None)
+        return incoming_cfg
+
     for secret_field in SERVICE_SECRET_FIELDS:
         if secret_field not in existing_cfg:
             continue
