@@ -14,6 +14,13 @@ from api.services.pipecat.in_memory_buffers import (
     InMemoryRecordingBuffers,
 )
 from api.services.pipecat.pipeline_metrics_aggregator import PipelineMetricsAggregator
+from api.services.pipecat.receptionist_runtime_observer import (
+    ReceptionistRuntimeObserver,
+)
+from api.services.pipecat.receptionist_runtime_policy import (
+    ReceptionistRuntimePolicy,
+    sanitize_receptionist_gathered_context,
+)
 from api.services.pipecat.termination_funnel_processor import (
     TerminationFunnelProcessor,
 )
@@ -80,12 +87,16 @@ def register_event_handlers(
     user_provider_id: str | None = None,
     integration_runtime_sessions: list[IntegrationRuntimeSession] | None = None,
     include_transcript_end_timestamps: bool = False,
+    receptionist_policy: ReceptionistRuntimePolicy | None = None,
+    receptionist_observer: ReceptionistRuntimeObserver | None = None,
 ):
     """Register all event handlers for transport and task events.
 
     Returns:
         In-memory recording buffers for use by other handlers.
     """
+    receptionist_policy = receptionist_policy or ReceptionistRuntimePolicy()
+
     # Initialize in-memory buffers with proper audio configuration
     sample_rate = audio_config.pipeline_sample_rate if audio_config else 16000
     num_channels = 1  # Pipeline audio is always mono
@@ -120,11 +131,12 @@ def register_event_handlers(
         ):
             ready_state["initial_response_triggered"] = True
 
-            asyncio.create_task(
-                _capture_call_event(
-                    workflow_run_id, user_provider_id, PostHogEvent.CALL_STARTED
+            if receptionist_policy.emit_completion_side_effects:
+                asyncio.create_task(
+                    _capture_call_event(
+                        workflow_run_id, user_provider_id, PostHogEvent.CALL_STARTED
+                    )
                 )
-            )
 
             # Wait for pre-call fetch if in progress, playing ringer meanwhile
             if pre_call_fetch_task is not None:
@@ -177,7 +189,8 @@ def register_event_handlers(
     @transport.event_handler("on_client_connected")
     async def on_client_connected(_transport, _participant):
         logger.debug("In on_client_connected callback handler")
-        await audio_buffer.start_recording()
+        if receptionist_policy.persist_audio:
+            await audio_buffer.start_recording()
         ready_state["client_connected"] = True
         await maybe_trigger_initial_response()
 
@@ -189,8 +202,9 @@ def register_event_handlers(
             f"In on_client_disconnected callback handler. Call disposed: {call_disposed}"
         )
 
-        # Stop recordings
-        await audio_buffer.stop_recording()
+        # Stop transient recording aggregation only when it was enabled.
+        if receptionist_policy.persist_audio:
+            await audio_buffer.stop_recording()
 
         # A disconnect right after a handoff is the external PBX taking the
         # customer leg, not the caller hanging up. The reason stays distinct
@@ -214,6 +228,8 @@ def register_event_handlers(
         await maybe_trigger_initial_response()
 
     async def _record_pipeline_error() -> None:
+        if not receptionist_policy.emit_completion_side_effects:
+            return
         try:
             workflow_run = await db_client.get_workflow_run_by_id(workflow_run_id)
             if workflow_run and workflow_run.campaign_id:
@@ -243,7 +259,15 @@ def register_event_handlers(
         separate task racing the shutdown.
         """
         if error is not None:
-            logger.error(f"Pipeline error for workflow run {workflow_run_id}: {error}")
+            if receptionist_policy.enabled:
+                logger.error(
+                    f"Pipeline error for receptionist workflow run "
+                    f"{workflow_run_id}; provider detail suppressed"
+                )
+            else:
+                logger.error(
+                    f"Pipeline error for workflow run {workflow_run_id}: {error}"
+                )
             await _record_pipeline_error()
         await engine.end_call_with_reason(reason, abort_immediately=True)
 
@@ -275,12 +299,14 @@ def register_event_handlers(
         # Turn and feedback observers run on independent queues. Drain them
         # before finalizing immutable transcripts and taking the DB snapshot.
         await task.wait_for_observers()
-        await transcript_log_coordinator.flush()
+        if receptionist_policy.persist_transcript:
+            await transcript_log_coordinator.flush()
 
         workflow_run = await db_client.get_workflow_run_by_id(workflow_run_id)
 
-        # Stop recordings
-        await audio_buffer.stop_recording()
+        # Stop transient recording aggregation only when it was enabled.
+        if receptionist_policy.persist_audio:
+            await audio_buffer.stop_recording()
 
         # Add trace URL if available (must be done before conversation tracing ends)
         if task.turn_trace_observer:
@@ -291,10 +317,13 @@ def register_event_handlers(
                     engine.record_context({"trace_url": trace_url})
                     logger.debug(f"Added trace URL to gathered_context: {trace_url}")
 
-        try:
-            has_user_speech = in_memory_logs_buffer.contains_user_speech()
-        except Exception:
-            has_user_speech = False
+        if receptionist_observer is not None:
+            has_user_speech = receptionist_observer.saw_user_speech
+        else:
+            try:
+                has_user_speech = in_memory_logs_buffer.contains_user_speech()
+            except Exception:
+                has_user_speech = False
 
         engine.record_call_tags(["user_speech"] if has_user_speech else [])
 
@@ -307,7 +336,11 @@ def register_event_handlers(
 
         # Store disposition code in workflow for dynamic filtering
         disposition_code = gathered_context.get("mapped_call_disposition")
-        if disposition_code and workflow_run:
+        if (
+            disposition_code
+            and workflow_run
+            and receptionist_policy.emit_completion_side_effects
+        ):
             try:
                 await db_client.add_call_disposition_code(
                     workflow_run.workflow_id, disposition_code
@@ -318,20 +351,25 @@ def register_event_handlers(
                     exc_info=True,
                 )
 
-        # Clean up engine resources (including voicemail detector)
+        if receptionist_policy.enabled:
+            gathered_context = sanitize_receptionist_gathered_context(gathered_context)
+
+        # Clean up engine resources (including voicemail detector). Ephemeral
+        # certification runs do not invoke post-call integration side effects.
         integration_logs: dict[str, object] = {}
-        for runtime_session in integration_runtime_sessions or []:
-            try:
-                session_logs = await runtime_session.on_call_finished(
-                    gathered_context=gathered_context
-                )
-                if session_logs:
-                    integration_logs.update(session_logs)
-            except Exception as e:
-                logger.error(
-                    f"Error finalizing integration runtime session '{runtime_session.name}': {e}",
-                    exc_info=True,
-                )
+        if receptionist_policy.emit_completion_side_effects:
+            for runtime_session in integration_runtime_sessions or []:
+                try:
+                    session_logs = await runtime_session.on_call_finished(
+                        gathered_context=gathered_context
+                    )
+                    if session_logs:
+                        integration_logs.update(session_logs)
+                except Exception as e:
+                    logger.error(
+                        f"Error finalizing integration runtime session '{runtime_session.name}': {e}",
+                        exc_info=True,
+                    )
 
         await engine.cleanup()
 
@@ -363,10 +401,23 @@ def register_event_handlers(
             logger.warning(f"Failed to close Smart-Turn analyzer gracefully: {exc}")
 
         usage_info = pipeline_metrics_aggregator.get_all_usage_metrics_serialized()
-
-        logger.debug(
-            f"Usage metrics: {usage_info}, Gathered context: {gathered_context}"
+        receptionist_snapshot = (
+            receptionist_observer.snapshot()
+            if receptionist_observer is not None
+            else None
         )
+        if receptionist_snapshot is not None:
+            usage_info["receptionist"] = receptionist_snapshot["counters"]
+
+        if receptionist_policy.enabled:
+            logger.debug(
+                f"Usage metrics captured for receptionist run {workflow_run_id}; "
+                "gathered context content suppressed"
+            )
+        else:
+            logger.debug(
+                f"Usage metrics: {usage_info}, Gathered context: {gathered_context}"
+            )
 
         await db_client.update_workflow_run(
             run_id=workflow_run_id,
@@ -376,14 +427,17 @@ def register_event_handlers(
             state=WorkflowRunState.COMPLETED.value,
         )
 
-        asyncio.create_task(
-            _capture_call_event(
-                workflow_run_id, user_provider_id, PostHogEvent.CALL_COMPLETED
+        if receptionist_policy.emit_completion_side_effects:
+            asyncio.create_task(
+                _capture_call_event(
+                    workflow_run_id, user_provider_id, PostHogEvent.CALL_COMPLETED
+                )
             )
-        )
 
         logs_update: dict[str, object] = {}
-        if not in_memory_logs_buffer.is_empty:
+        if receptionist_snapshot is not None:
+            logs_update["receptionist_observability"] = receptionist_snapshot
+        elif not in_memory_logs_buffer.is_empty:
             try:
                 feedback_events = in_memory_logs_buffer.get_events()
                 logs_update["realtime_feedback_events"] = feedback_events
@@ -395,7 +449,8 @@ def register_event_handlers(
         else:
             logger.debug("Logs buffer is empty, skipping save")
 
-        logs_update.update(integration_logs)
+        if not receptionist_policy.enabled:
+            logs_update.update(integration_logs)
 
         if logs_update:
             try:
@@ -415,7 +470,12 @@ def register_event_handlers(
             user_audio_wav = None
             bot_audio_wav = None
 
-            if not ENABLE_CALL_RECORDING_UPLOAD:
+            if not receptionist_policy.persist_audio:
+                logger.info(
+                    "Call recording and audio persistence are disabled by the "
+                    "public receptionist runtime policy"
+                )
+            elif not ENABLE_CALL_RECORDING_UPLOAD:
                 logger.info(
                     "Call recording upload is disabled "
                     "(ENABLE_CALL_RECORDING_UPLOAD=false), skipping audio upload"
@@ -436,28 +496,41 @@ def register_event_handlers(
                 else:
                     logger.debug("Bot audio buffer is empty, skipping upload")
 
-            transcript_text = in_memory_logs_buffer.generate_transcript_text(
-                include_end_timestamps=include_transcript_end_timestamps
-            )
-            if not transcript_text:
-                logger.debug("No transcript events in logs buffer, skipping upload")
+            transcript_text = None
+            if receptionist_policy.persist_transcript:
+                transcript_text = in_memory_logs_buffer.generate_transcript_text(
+                    include_end_timestamps=include_transcript_end_timestamps
+                )
+                if not transcript_text:
+                    logger.debug("No transcript events in logs buffer, skipping upload")
+            else:
+                logger.info(
+                    "Transcript persistence is disabled by the public "
+                    "receptionist runtime policy"
+                )
 
-            await upload_workflow_run_artifacts(
-                workflow_run_id,
-                mixed_audio_wav=mixed_audio_wav,
-                user_audio_wav=user_audio_wav,
-                bot_audio_wav=bot_audio_wav,
-                transcript_text=transcript_text,
-            )
+            if (
+                receptionist_policy.persist_audio
+                or receptionist_policy.persist_transcript
+            ):
+                await upload_workflow_run_artifacts(
+                    workflow_run_id,
+                    mixed_audio_wav=mixed_audio_wav,
+                    user_audio_wav=user_audio_wav,
+                    bot_audio_wav=bot_audio_wav,
+                    transcript_text=transcript_text,
+                )
         except Exception as e:
             logger.error(f"Error uploading call artifacts: {e}", exc_info=True)
 
         # Combined task: runs integrations (including QA), then calculates
-        # cost (so QA token usage is captured in usage_info)
-        await enqueue_job(
-            FunctionNames.PROCESS_WORKFLOW_COMPLETION,
-            workflow_run_id,
-        )
+        # cost (so QA token usage is captured in usage_info). Ephemeral test
+        # runs deliberately suppress this post-call side-effect surface.
+        if receptionist_policy.emit_completion_side_effects:
+            await enqueue_job(
+                FunctionNames.PROCESS_WORKFLOW_COMPLETION,
+                workflow_run_id,
+            )
 
     # Return the buffer so it can be passed to other handlers
     return in_memory_audio_buffers

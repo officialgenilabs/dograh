@@ -1,0 +1,25 @@
+AFV-M1D.3A disposable test environment diagnosis
+
+Observed source prerequisite:
+- api/conftest.py:21 imports `from dotenv import load_dotenv`.
+- No direct python-dotenv/dotenv declaration was found in api/requirements*.txt or api/pyproject.toml.
+
+Observed disposable image behavior (image id sha256:1c8c4a67f5ab6af0696ffffa79b3d266bc2d331cc472775d3a06600da5cc1b31):
+- A login shell (`bash -lc`) resets PATH to `/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games`.
+- That shell resolves `python` to `/usr/local/bin/python`.
+- `/usr/local/bin/python` reports `dotenv_spec=None` and raises `ModuleNotFoundError: No module named 'dotenv'`.
+- The application interpreter is `/opt/venv/bin/python`.
+- `/opt/venv/bin/python` finds `dotenv` at `/opt/venv/lib/python3.13/site-packages/dotenv/__init__.py`.
+- `/opt/venv/bin/python -m pip show python-dotenv` reports version 1.2.3, required transitively by fastmcp, noveum-trace, and pydantic-settings.
+- `/opt/venv/bin/python` does not contain pytest or pytest-asyncio.
+
+Root cause:
+- The initial failure was interpreter selection, not an absent production runtime package: the login shell selected `/usr/local/bin/python` instead of the image's `/opt/venv/bin/python`.
+
+Smallest safe test-only repair:
+- Invoke `/opt/venv/bin/python` explicitly.
+- Install only pytest and pytest-asyncio into `/tmp/m1d3a-testdeps` inside each `docker run --rm` container.
+- Put `/tmp/m1d3a-testdeps` and the read-only pinned Pipecat source on PYTHONPATH.
+- Do not modify production requirements, the image, source mounts, or production runtime.
+
+Supporting raw probe: evidence/m1d3a-predeploy/test_environment_login_shell_probe.txt

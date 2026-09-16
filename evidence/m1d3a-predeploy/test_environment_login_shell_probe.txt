@@ -1,0 +1,9 @@
+=== login-shell interpreter probe ===
+PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games
+python=/usr/local/bin/python
+/usr/local/bin/python
+dotenv_spec= None
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import dotenv
+ModuleNotFoundError: No module named 'dotenv'

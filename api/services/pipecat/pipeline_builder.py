@@ -169,6 +169,7 @@ def create_pipeline_task(
     conversation_parent_context=None,
     conversation_type: str = "voice",
     additional_span_attributes: dict | None = None,
+    enable_tracing: bool = True,
 ):
     """Create a pipeline task with appropriate parameters.
 
@@ -184,6 +185,8 @@ def create_pipeline_task(
         additional_span_attributes: Extra attributes set on the conversation
             span (e.g. ``langfuse.trace.name`` to name a stitched trace that
             has no real root span).
+        enable_tracing: Whether to export conversation traces. Privacy-scoped
+            receptionist runs disable this content-bearing telemetry path.
     """
     # Set up pipeline params with audio configuration if provided
     pipeline_params = PipelineParams(
@@ -206,7 +209,7 @@ def create_pipeline_task(
     task = PipelineWorker(
         pipeline,
         params=pipeline_params,
-        enable_tracing=True,
+        enable_tracing=enable_tracing,
         enable_rtvi=False,
         conversation_id=f"{workflow_run_id}",
         conversation_parent_context=conversation_parent_context,

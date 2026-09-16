@@ -52,6 +52,12 @@ from api.services.pipecat.realtime_feedback_observer import (
     RealtimeFeedbackObserver,
     register_turn_log_handlers,
 )
+from api.services.pipecat.receptionist_runtime_observer import (
+    ReceptionistRuntimeObserver,
+)
+from api.services.pipecat.receptionist_runtime_policy import (
+    resolve_receptionist_runtime_policy,
+)
 from api.services.pipecat.recording_audio_cache import (
     create_recording_audio_fetcher,
     warm_recording_cache,
@@ -613,6 +619,16 @@ async def _run_pipeline_impl(
     run_definition = workflow_run.definition
     run_workflow_json = run_definition.workflow_json
     run_configs = run_definition.workflow_configurations or {}
+    receptionist_policy = resolve_receptionist_runtime_policy(
+        workflow_id,
+        merged_call_context_vars,
+    )
+    if receptionist_policy.enabled:
+        logger.info(
+            f"[run {workflow_run_id}] Applying public receptionist runtime "
+            f"policy {receptionist_policy.policy_version}; "
+            f"ephemeral_test={receptionist_policy.ephemeral_test}"
+        )
 
     # Extract configurations from the version's workflow_configurations
     max_call_duration_seconds = DEFAULT_MAX_CALL_DURATION_SECONDS
@@ -767,7 +783,8 @@ async def _run_pipeline_impl(
         call_direction = call_direction.value
     call_direction = call_direction or merged_call_context_vars.get("direction")
     if (
-        start_node
+        receptionist_policy.emit_completion_side_effects
+        and start_node
         and start_node.should_run_pre_call_fetch(call_direction)
         and start_node.pre_call_fetch_url
     ):
@@ -817,11 +834,13 @@ async def _run_pipeline_impl(
             except Exception as e:
                 logger.debug(f"Failed to send node transition via WebSocket: {e}")
 
-        # Always log to in-memory buffer (node_id/node_name injected by buffer's append)
-        try:
-            await in_memory_logs_buffer.append(message)
-        except Exception as e:
-            logger.error(f"Failed to append node transition to logs buffer: {e}")
+        # Public-receptionist runs persist only the separate categorical timing
+        # snapshot, not generic event logs that may acquire content fields.
+        if receptionist_policy.persist_realtime_feedback:
+            try:
+                await in_memory_logs_buffer.append(message)
+            except Exception as e:
+                logger.error(f"Failed to append node transition to logs buffer: {e}")
 
     node_transition_callback = send_node_transition
 
@@ -882,15 +901,19 @@ async def _run_pipeline_impl(
     # Create pipeline components
     audio_buffer, context = create_pipeline_components(audio_config)
 
-    integration_runtime_sessions = create_runtime_sessions(
-        IntegrationRuntimeContext(
-            workflow_run_id=workflow_run_id,
-            workflow_run=workflow_run,
-            workflow_graph=workflow_graph,
-            run_definition=run_definition,
-            user_config=user_config,
-            is_realtime=is_realtime,
-            context_messages_provider=lambda: context.messages,
+    integration_runtime_sessions = (
+        []
+        if receptionist_policy.enabled
+        else create_runtime_sessions(
+            IntegrationRuntimeContext(
+                workflow_run_id=workflow_run_id,
+                workflow_run=workflow_run,
+                workflow_graph=workflow_graph,
+                run_definition=run_definition,
+                user_config=user_config,
+                is_realtime=is_realtime,
+                context_messages_provider=lambda: context.messages,
+            )
         )
     )
 
@@ -1093,13 +1116,34 @@ async def _run_pipeline_impl(
         )
 
     # Create pipeline task with audio configuration
-    task = create_pipeline_task(pipeline, workflow_run_id, audio_config)
+    task = create_pipeline_task(
+        pipeline,
+        workflow_run_id,
+        audio_config,
+        enable_tracing=not receptionist_policy.enabled,
+    )
     transcript_log_coordinator = TranscriptLogCoordinator(in_memory_logs_buffer)
     if task.turn_tracking_observer is None:
-        raise RuntimeError("Transcript logging requires turn tracking to be enabled")
+        raise RuntimeError("Turn tracking is required for voice runtime telemetry")
     transcript_log_coordinator.attach_turn_tracking_observer(
         task.turn_tracking_observer
     )
+
+    receptionist_observer = None
+    if receptionist_policy.enabled:
+        receptionist_observer = ReceptionistRuntimeObserver(
+            policy=receptionist_policy,
+            queue_fallback=task.queue_frame,
+        )
+        receptionist_observer.attach_turn_tracking_observer(
+            task.turn_tracking_observer
+        )
+        for provider_processor in (stt, llm, tts):
+            if provider_processor is not None:
+                provider_processor.add_event_handler(
+                    "on_error", receptionist_observer.handle_provider_error
+                )
+        task.add_observer(receptionist_observer)
 
     for runtime_session in integration_runtime_sessions:
         runtime_session.attach(task)
@@ -1117,6 +1161,7 @@ async def _run_pipeline_impl(
     feedback_observer = RealtimeFeedbackObserver(
         ws_sender=ws_sender,
         logs_buffer=in_memory_logs_buffer,
+        persist_events=receptionist_policy.persist_realtime_feedback,
     )
     task.add_observer(feedback_observer)
 
@@ -1152,12 +1197,14 @@ async def _run_pipeline_impl(
             except Exception as e:
                 logger.error(f"Failed to append latency to logs buffer: {e}")
 
-    # Register turn log handlers for all call types (WebRTC and telephony)
-    register_turn_log_handlers(
-        transcript_log_coordinator,
-        user_context_aggregator,
-        assistant_context_aggregator,
-    )
+    # The receptionist profile never persists transcript bodies. Other
+    # workflows retain the existing transcript behavior unchanged.
+    if receptionist_policy.persist_transcript:
+        register_turn_log_handlers(
+            transcript_log_coordinator,
+            user_context_aggregator,
+            assistant_context_aggregator,
+        )
 
     # Register event handlers — resolve provider_id for PostHog tracking
     if not user_provider_id:
@@ -1178,9 +1225,12 @@ async def _run_pipeline_impl(
         user_provider_id=user_provider_id,
         integration_runtime_sessions=integration_runtime_sessions,
         include_transcript_end_timestamps=include_transcript_end_timestamps,
+        receptionist_policy=receptionist_policy,
+        receptionist_observer=receptionist_observer,
     )
 
-    register_audio_data_handler(audio_buffer, workflow_run_id, in_memory_audio_buffer)
+    if receptionist_policy.persist_audio:
+        register_audio_data_handler(audio_buffer, workflow_run_id, in_memory_audio_buffer)
 
     try:
         # Run the pipeline

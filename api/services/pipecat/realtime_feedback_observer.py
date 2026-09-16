@@ -20,8 +20,8 @@ rather than being observed here, to ensure precise timing at the moment of
 node changes.
 """
 
-import json
-from typing import TYPE_CHECKING, Awaitable, Callable, Optional, Set
+from collections import OrderedDict
+from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
 from loguru import logger
 
@@ -92,17 +92,23 @@ class RealtimeFeedbackObserver(BaseObserver):
         self,
         ws_sender: Callable[[dict], Awaitable[None]],
         logs_buffer: Optional["InMemoryLogsBuffer"] = None,
+        *,
+        persist_events: bool = True,
     ):
         """
         Args:
             ws_sender: Async function to send messages over WebSocket.
                        Expected signature: async def send(message: dict) -> None
             logs_buffer: Optional InMemoryLogsBuffer to persist events for post-call analysis.
+            persist_events: Whether sanitized feedback events may be persisted. The
+                receptionist privacy profile disables this and stores only its
+                separate categorical timing snapshot.
         """
         super().__init__()
         self._ws_sender = ws_sender
         self._logs_buffer = logs_buffer
-        self._frames_seen: Set[str] = set()
+        self._persist_events = persist_events
+        self._frames_seen: OrderedDict[str, None] = OrderedDict()
 
     async def cleanup(self):
         """Clean up resources. Must be called when the observer is no longer needed."""
@@ -139,9 +145,16 @@ class RealtimeFeedbackObserver(BaseObserver):
         ):
             return
 
-        self._frames_seen.add(frame.id)
+        self._frames_seen[frame.id] = None
+        if len(self._frames_seen) > 4096:
+            self._frames_seen.popitem(last=False)
 
-        logger.trace(f"{self} Received Frame: {frame} Direction: {frame_direction}")
+        if self._persist_events:
+            logger.trace(f"{self} Received Frame: {frame} Direction: {frame_direction}")
+        else:
+            logger.trace(
+                f"{self} received {type(frame).__name__}; frame content suppressed"
+            )
 
         if isinstance(frame, (EndFrame, CancelFrame, StopFrame, InterruptionFrame)):
             return
@@ -228,25 +241,23 @@ class RealtimeFeedbackObserver(BaseObserver):
             )
         # Handle TTFB metrics - capture LLM generation time only
         elif isinstance(frame, MetricsFrame):
-            # Check if this MetricsFrame contains TTFB data from an LLM processor
-            for metric_data in frame.data:
-                if isinstance(metric_data, TTFBMetricsData):
-                    # Only send TTFB if it's from an LLM processor
-                    if metric_data.processor and "LLM" in metric_data.processor:
-                        await self._send_message(
-                            build_ttfb_metric_event(
-                                ttfb_seconds=metric_data.value,
-                                processor=metric_data.processor,
-                                model=metric_data.model,
+            # Check if this MetricsFrame contains TTFB data from an LLM processor.
+            # The privacy profile keeps model/processor labels out of caller-facing
+            # WebSocket events and stores only categorical timing telemetry.
+            if self._persist_events:
+                for metric_data in frame.data:
+                    if isinstance(metric_data, TTFBMetricsData):
+                        # Only send TTFB if it's from an LLM processor
+                        if metric_data.processor and "LLM" in metric_data.processor:
+                            await self._send_message(
+                                build_ttfb_metric_event(
+                                    ttfb_seconds=metric_data.value,
+                                    processor=metric_data.processor,
+                                    model=metric_data.model,
+                                )
                             )
-                        )
         # Handle pipeline errors
         elif isinstance(frame, ErrorFrame):
-            processor_name = str(frame.processor) if frame.processor else None
-            extra_payload: dict[str, object] = {}
-            # Surface structured fields when the underlying exception carries
-            # them (e.g. google.genai APIError: code=1008, status=None,
-            # message="Your project has been denied access...").
             exc = frame.exception
             metadata = failure_metadata_for_processor(frame.processor)
             if exc is not None:
@@ -263,34 +274,27 @@ class RealtimeFeedbackObserver(BaseObserver):
                     provider=metadata.provider,
                     error_owner=metadata.error_owner,
                 )
-            log_failure(
-                failure,
-                fatal=frame.fatal,
-            )
+            failure_log_context: dict[str, object] = {"fatal": frame.fatal}
+            if not self._persist_events:
+                failure_log_context["include_internal_message"] = False
+            log_failure(failure, **failure_log_context)
 
-            if exc is not None:
-                exc_type = type(exc).__name__
-                extra_payload["exception_type"] = exc_type
-                extra_payload["exception_message"] = str(exc)
-                for attr in ("code", "status", "message", "details"):
-                    value = getattr(exc, attr, None)
-                    if value is None or attr in extra_payload:
-                        continue
-                    try:
-                        # Ensure the value is JSON-serializable; fall back
-                        # to str() for opaque objects (e.g. raw response).
-                        json.dumps(value)
-                        extra_payload[attr] = value
-                    except (TypeError, ValueError):
-                        extra_payload[attr] = str(value)
-            await self._send_message(
-                build_pipeline_error_event(
-                    error=frame.error,
-                    fatal=frame.fatal,
-                    processor=processor_name,
-                    extra_payload=extra_payload or None,
-                )
+            # Never mirror raw provider text, exception attributes, response
+            # bodies, headers, or processor representations to callers or run
+            # logs. The structured DOGRAH_FAILURE record above remains the
+            # internal diagnostic source.
+            message = build_pipeline_error_event(
+                error="The request could not be completed.",
+                fatal=frame.fatal,
+                extra_payload={
+                    "category": failure.type.value,
+                    "retryable": bool(failure.retryable),
+                },
             )
+            if self._persist_events:
+                await self._send_message(message)
+            else:
+                await self._send_ws(message)
 
     async def _send_ws(self, message: dict):
         """Send message via WebSocket only, handling errors gracefully."""
@@ -315,7 +319,7 @@ class RealtimeFeedbackObserver(BaseObserver):
 
     async def _append_to_buffer(self, message: dict):
         """Append message to logs buffer, handling errors gracefully."""
-        if self._logs_buffer:
+        if self._logs_buffer and self._persist_events:
             try:
                 await self._logs_buffer.append(message)
             except Exception as e:

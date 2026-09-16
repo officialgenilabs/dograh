@@ -1,0 +1,82 @@
+=== canonical final compact M1D.3A regression suite ===
+container=--rm; interpreter=/opt/venv/bin/python; source mounts=read-only; test-only deps=pytest==8.4.2 pytest-asyncio==1.2.0 in /tmp/m1d3a-testdeps
+2026-09-16 15:00:04.548 | [1mINFO[0m | __init__.py:54 | ᓚᘏᗢ Pipecat 0.0.0.dev0 (Python 3.13.15 (main, Sep  1 2026, 00:07:39) [GCC 14.2.0]) ᓚᘏᗢ
+============================= test session starts ==============================
+platform linux -- Python 3.13.15, pytest-8.4.2, pluggy-1.6.0
+cachedir: /tmp/pytest-cache
+rootdir: /app/api
+configfile: pytest.ini
+plugins: asyncio-1.2.0, anyio-4.14.2
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=session, asyncio_default_test_loop_scope=session
+2026-09-16 15:00:12.876 | [1mINFO[0m | storage.py:90 | ENVIRONMENT=test — using NullFileSystem (no storage backend)
+[0;93m2026-09-16 15:00:14.911269481 [W:onnxruntime:Default, device_discovery.cc:132 GetPciBusId] Skipping pci_bus_id for PCI path at "/sys/devices/LNXSYSTM:00/LNXSYBUS:00/ACPI0004:00/MSFT1000:00/5620e0c7-8062-4dce-aeb7-520c7ef76171" because filename ""5620e0c7-8062-4dce-aeb7-520c7ef76171"" dit not match expected pattern of [0-9a-f]+:[0-9a-f]+:[0-9a-f]+[.][0-9a-f]+[m
+collected 153 items
+
+api/tests/test_receptionist_runtime.py .........2026-09-16 15:00:16.879 | [1mINFO[0m | event_handlers.py:474 | Call recording and audio persistence are disabled by the public receptionist runtime policy
+2026-09-16 15:00:16.879 | [1mINFO[0m | event_handlers.py:507 | Transcript persistence is disabled by the public receptionist runtime policy
+.
+api/tests/test_realtime_feedback_observer.py ...........
+api/tests/test_realtime_feedback_events.py ...
+api/tests/test_pipeline_error_handling.py .2026-09-16 15:00:16.894 | [31m[1mERROR[0m | event_handlers.py:268 | Pipeline error for workflow run 88: ErrorFrame#9(error: unrecoverable failure, fatal: True)
+..
+api/tests/test_pipeline_cancellation.py .
+api/tests/test_termination_funnel.py ...2026-09-16 15:00:17.160 | [33m[1mWARNING[0m | worker.py:1183 | PipelineWorker#4: Something went wrong: ErrorFrame#11(error: provider reconnect, fatal: False)
+....2026-09-16 15:00:17.255 | [31m[1mERROR[0m | termination_funnel_processor.py:131 | Engine did not finish disposing of the call within 0.05s; cancelling the pipeline
+2026-09-16 15:00:17.306 | [31m[1mERROR[0m | termination_funnel_processor.py:150 | No terminal frame 0.05s after disposing of the call; cancelling the pipeline
+.2026-09-16 15:00:17.358 | [31m[1mERROR[0m | termination_funnel_processor.py:150 | No terminal frame 0.05s after disposing of the call; cancelling the pipeline
+....
+api/tests/test_failure_classification.py ...............................................2026-09-16 15:00:17.425 | [31m[1mERROR[0m | test_failure_classification.py:342 | DOGRAH_FAILURE [src=webhook type=config_error code=webhook-404] [owner=user] Endpoint returned 404
+.2026-09-16 15:00:17.434 | [31m[1mERROR[0m | test_failure_classification.py:377 | DOGRAH_FAILURE [src=platform type=system_error code=platform-test] [owner=operator] Test failure
+.........
+api/tests/test_failure_emission_seams.py 2026-09-16 15:00:17.445 | [1mINFO[0m | custom_tool.py:456 | Executing custom tool 'Customer Lookup' (tool-1): POST https://customer.test/lookup
+.2026-09-16 15:00:17.448 | [1mINFO[0m | pre_call_fetch.py:117 | Pre-call fetch: POST https://customer.test/context
+.2026-09-16 15:00:17.458 | [31m[1mERROR[0m | registry.py:129 | DOGRAH_FAILURE [src=integration type=provider_error code=salesforce-connection] [owner=user] ConnectError: connection refused
+.2026-09-16 15:00:17.464 | [1mINFO[0m | webhook_delivery.py:137 | Webhook 'Final Webhook' delivery 1 request (attempt 1): {"method": "POST", "url": "https://customer.test", "headers": {"Content-Type": "application/json", "X-Dograh-Delivery-Id": "delivery-uuid", "X-Dograh-Workflow-Run-Id": "88", "X-Dograh-Delivery-Attempt": "1"}, "payload": {"event": "done"}}
+2026-09-16 15:00:17.465 | [33m[1mWARNING[0m | webhook_delivery.py:237 | Webhook 'Final Webhook' delivery 1 attempt 1 failed (ConnectError('connection refused')); retrying in 30s (attempt 2/5)
+.2026-09-16 15:00:17.470 | [1mINFO[0m | webhook_delivery.py:137 | Webhook 'Final Webhook' delivery 1 request (attempt 5): {"method": "POST", "url": "https://customer.test", "headers": {"Content-Type": "application/json", "X-Dograh-Delivery-Id": "delivery-uuid", "X-Dograh-Workflow-Run-Id": "88", "X-Dograh-Delivery-Attempt": "5"}, "payload": {"event": "done"}}
+.
+api/tests/test_service_factory_failure_reporting.py 2026-09-16 15:00:17.472 | [1mINFO[0m | service_factory.py:963 | Creating LLM service: provider=not-a-provider, model=model
+.2026-09-16 15:00:17.473 | [1mINFO[0m | service_factory.py:963 | Creating LLM service: provider=openai, model=gpt-4.1-mini
+.2026-09-16 15:00:17.474 | [1mINFO[0m | service_factory.py:963 | Creating LLM service: provider=dograh, model=gpt-4.1-mini
+.
+api/tests/test_call_recording_upload_flag.py 2026-09-16 15:00:17.480 | [1mINFO[0m | in_memory_buffers.py:64 | Encoded 320 bytes of audio to 364 WAV bytes for workflow 88
+2026-09-16 15:00:17.481 | [1mINFO[0m | in_memory_buffers.py:64 | Encoded 320 bytes of audio to 364 WAV bytes for workflow 88
+2026-09-16 15:00:17.481 | [1mINFO[0m | in_memory_buffers.py:64 | Encoded 320 bytes of audio to 364 WAV bytes for workflow 88
+.2026-09-16 15:00:17.486 | [1mINFO[0m | event_handlers.py:479 | Call recording upload is disabled (ENABLE_CALL_RECORDING_UPLOAD=false), skipping audio upload
+.
+api/tests/test_recording_router_processor.py .2026-09-16 15:00:17.515 | [1mINFO[0m | recording_router_processor.py:247 | Playing pre-recorded audio: abc123
+..2026-09-16 15:00:17.545 | [1mINFO[0m | recording_router_processor.py:247 | Playing pre-recorded audio: fetafnqb
+.
+api/tests/test_run_pipeline_realtime_turn_config.py .....................
+api/tests/test_webrtc_offer_completed_run.py 2026-09-16 15:00:17.769 | [1mINFO[0m | webrtc_signaling.py:610 | Rejecting offer for completed workflow run 630140
+..2026-09-16 15:00:17.778 | [1mINFO[0m | webrtc_signaling.py:610 | Rejecting offer for completed workflow run 630140
+..
+api/tests/test_webrtc_pipeline_task_logging.py 2026-09-16 15:00:17.787 | [1mINFO[0m | webrtc_signaling.py:332 | [run 123] WebRTC pipeline rejected: Workflow run already completed
+.2026-09-16 15:00:17.792 | [31m[1mERROR[0m | webrtc_signaling.py:345 | DOGRAH_FAILURE [src=platform type=system_error code=platform-unknown] [owner=operator] ValueError: boom
+.2026-09-16 15:00:17.798 | [33m[1mWARNING[0m | webrtc_signaling.py:336 | [run 123] WebRTC pipeline ended on a reported failure: boom
+...
+api/tests/test_webrtc_signaling_concurrency.py .2026-09-16 15:00:17.813 | [1mINFO[0m | webrtc_signaling.py:582 | Reusing existing connection for pc_id: pc-1
+.2026-09-16 15:00:17.816 | [33m[1mWARNING[0m | webrtc_signaling.py:857 | workflow run 501 belongs to workflow 99, not 33
+..
+api/tests/test_webrtc_signaling_ice_filter_policies.py .....2026-09-16 15:00:17.822 | [1mINFO[0m | webrtc_signaling.py:278 | TURN server configured with time-limited credentials, TTL: 86400s
+..2026-09-16 15:00:17.823 | [31m[1mERROR[0m | webrtc_signaling.py:260 | FORCE_TURN_RELAY is on but no TURN server is configured (ENABLE_COTURN=False, TURN_HOST=''). Relay-only connections cannot succeed until TURN is configured.
+.
+
+=============================== warnings summary ===============================
+<frozen abc>:106
+  <frozen abc>:106: DeprecationWarning: `AudioContextTTSService` is deprecated since 0.0.105 and will be removed in 2.0.0. Use `WebsocketTTSService` instead.
+
+<frozen abc>:106
+  <frozen abc>:106: DeprecationWarning: `SpeechTimeoutUserTurnStopStrategy` overrides `reset`, which is deprecated since 1.6.0 and will be removed in 2.0.0. Override `handle_user_turn_started` and `handle_user_turn_stopped` instead.
+
+tests/test_pipeline_cancellation.py::test_interruption_with_blocked_end_frame
+  /app/api/tests/test_pipeline_cancellation.py:65: DeprecationWarning: `EndTaskFrame` is deprecated since 1.4.0 and will be removed in 2.0.0. Use `EndWorkerFrame` instead.
+    await transport.queue_frame(EndTaskFrame(), direction=FrameDirection.UPSTREAM)
+
+tests/test_pipeline_cancellation.py::test_interruption_with_blocked_end_frame
+  /app/api/tests/test_pipeline_cancellation.py:71: DeprecationWarning: `InterruptionTaskFrame` is deprecated since 1.4.0 and will be removed in 2.0.0. Use `InterruptionWorkerFrame` instead.
+    InterruptionTaskFrame(), direction=FrameDirection.UPSTREAM
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================= 153 passed, 4 warnings in 13.22s =======================
+compact_regression_canonical_final_exit=0

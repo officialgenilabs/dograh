@@ -608,9 +608,14 @@ def log_failure(
     failure: DograhFailure,
     *,
     level: str = "ERROR",
+    include_internal_message: bool = True,
     **extra_context: Any,
 ) -> None:
-    """Emit one structured and greppable shadow-mode record; never raise."""
+    """Emit one structured and greppable shadow-mode record; never raise.
+
+    Privacy-scoped runtimes can suppress the provider's free-form message while
+    retaining categorical diagnostics.
+    """
 
     try:
         context = _safe_log_context({**failure.context, **extra_context})
@@ -632,6 +637,11 @@ def log_failure(
             classification_mode="explicit",
             **context,
         )
+        message = (
+            failure.internal_message
+            if include_internal_message
+            else "provider detail suppressed by runtime privacy policy"
+        )
         bound.opt(depth=1).log(
             level.upper(),
             "DOGRAH_FAILURE [src={} type={} code={}] [owner={}] {}",
@@ -639,7 +649,7 @@ def log_failure(
             failure.type.value,
             failure.code,
             failure.error_owner.value,
-            failure.internal_message,
+            message,
         )
     except Exception:
         # Deliberately do not attempt a fallback log: the logger itself may be what
