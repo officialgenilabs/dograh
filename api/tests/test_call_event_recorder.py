@@ -210,6 +210,38 @@ async def test_tool_only_completion_does_not_raise_empty_llm_alarm():
     assert observer._llm_empty_responses == 1
 
 
+async def test_in_flight_tool_only_completion_is_not_marked_empty():
+    sink = _RecordingSink()
+    observer = _observer(sink=sink)
+
+    await observer.on_push_frame(_pushed(LLMFullResponseStartFrame()))
+    await observer.on_push_frame(
+        _pushed(
+            FunctionCallInProgressFrame(
+                function_name="get_availability",
+                tool_call_id="pending-tool",
+                arguments={},
+            )
+        )
+    )
+    await observer.on_push_frame(_pushed(LLMFullResponseEndFrame()))
+
+    assert sink.count(ev.LLM_RESPONSE_EMPTY) == 0
+    assert "pending-tool" in observer._function_calls
+    await observer.on_push_frame(
+        _pushed(
+            FunctionCallResultFrame(
+                function_name="get_availability",
+                tool_call_id="pending-tool",
+                arguments={},
+                result={"slots": []},
+            )
+        )
+    )
+    assert sink.count(ev.FUNCTION_CALL_ENDED) == 1
+    assert sink.count(ev.LLM_RESPONSE_EMPTY) == 0
+
+
 async def test_tool_outside_llm_response_does_not_hide_later_empty_completion():
     sink = _RecordingSink()
     observer = _observer(sink=sink)
