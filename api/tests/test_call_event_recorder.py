@@ -171,6 +171,31 @@ async def test_llm_response_without_text_is_reported_empty():
     assert ev.LLM_RESPONSE_EMPTY not in sink.names()
 
 
+async def test_whitespace_only_llm_response_is_reported_empty():
+    sink = _RecordingSink()
+    observer = _observer(sink=sink)
+
+    await observer.on_push_frame(_pushed(LLMFullResponseStartFrame()))
+    await observer.on_push_frame(_pushed(LLMTextFrame("  ")))
+    await observer.on_push_frame(_pushed(LLMTextFrame("\\n\\t")))
+    await observer.on_push_frame(_pushed(LLMFullResponseEndFrame()))
+
+    assert sink.count(ev.LLM_RESPONSE_EMPTY) == 1
+    assert observer._llm_empty_responses == 1
+
+
+async def test_text_after_whitespace_is_not_reported_empty():
+    sink = _RecordingSink()
+    observer = _observer(sink=sink)
+
+    await observer.on_push_frame(_pushed(LLMFullResponseStartFrame()))
+    await observer.on_push_frame(_pushed(LLMTextFrame("\\n ")))
+    await observer.on_push_frame(_pushed(LLMTextFrame("Hello")))
+    await observer.on_push_frame(_pushed(LLMFullResponseEndFrame()))
+
+    assert sink.count(ev.LLM_RESPONSE_EMPTY) == 0
+
+
 async def test_tool_only_completion_does_not_raise_empty_llm_alarm():
     sink = _RecordingSink()
     observer = _observer(sink=sink)
