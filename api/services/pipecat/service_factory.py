@@ -1648,6 +1648,7 @@ def create_realtime_llm_service(user_config, audio_config: "AudioConfig"):
             AudioInput,
             InputAudioTranscription,
             SessionProperties,
+            TurnDetection,
         )
 
         grok_voice = voice or "ara"
@@ -1660,6 +1661,10 @@ def create_realtime_llm_service(user_config, audio_config: "AudioConfig"):
                 model=model,
                 session_properties=SessionProperties(
                     voice=grok_voice,
+                    # The Grok pipeline relies on server-side turn frames and
+                    # intentionally has no local VAD fallback. Pin this contract
+                    # rather than relying on Pipecat's session default.
+                    turn_detection=TurnDetection(type="server_vad"),
                     audio=AudioConfiguration(
                         input=AudioInput(
                             transcription=InputAudioTranscription(),
