@@ -229,6 +229,38 @@ def test_factory_creates_dograh_grok_realtime_service():
     assert service._settings.session_properties.audio.input.transcription.model == (
         "grok-transcribe"
     )
+    # The pipeline disables local VAD for Grok, so provider turn frames are
+    # required. Keep this assertion even if Pipecat changes session defaults.
+    assert service._settings.session_properties.turn_detection is not None
+    assert service._settings.session_properties.turn_detection.type == "server_vad"
+
+
+def test_grok_factory_passes_server_vad_explicitly(monkeypatch):
+    from pipecat.services.xai.realtime import events as grok_events
+
+    actual_session_properties = grok_events.SessionProperties
+    supplied_session_properties = []
+
+    def record_session_properties(**kwargs):
+        supplied_session_properties.append(kwargs)
+        return actual_session_properties(**kwargs)
+
+    monkeypatch.setattr(grok_events, "SessionProperties", record_session_properties)
+    effective_config = EffectiveAIModelConfiguration(
+        is_realtime=True,
+        realtime=GrokRealtimeLLMConfiguration(
+            provider="grok_realtime",
+            api_key="xai-key",
+            model="grok-voice-think-fast-1.0",
+            voice="Sal",
+        ),
+    )
+
+    create_realtime_llm_service(effective_config, audio_config=SimpleNamespace())
+
+    assert len(supplied_session_properties) == 1
+    assert "turn_detection" in supplied_session_properties[0]
+    assert supplied_session_properties[0]["turn_detection"].type == "server_vad"
 
 
 def test_grok_audio_config_preserves_transcription_when_filling_sample_rates():
