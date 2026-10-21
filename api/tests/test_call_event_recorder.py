@@ -11,8 +11,10 @@ from unittest.mock import create_autospec
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
+    FunctionCallFromLLM,
     FunctionCallInProgressFrame,
     FunctionCallResultFrame,
+    FunctionCallsFromLLMInfoFrame,
     InputAudioRawFrame,
     InterruptionFrame,
     LLMFullResponseEndFrame,
@@ -240,6 +242,39 @@ async def test_in_flight_tool_only_completion_is_not_marked_empty():
     )
     assert sink.count(ev.FUNCTION_CALL_ENDED) == 1
     assert sink.count(ev.LLM_RESPONSE_EMPTY) == 0
+
+
+async def test_deferred_tool_intent_is_not_counted_as_empty_llm_response():
+    sink = _RecordingSink()
+    observer = _observer(sink=sink)
+
+    await observer.on_push_frame(_pushed(LLMFullResponseStartFrame()))
+    # The provider can announce function-call intent before the LLM ends,
+    # even if the actual call begins after a speech/playback boundary.
+    await observer.on_push_frame(
+        _pushed(
+            FunctionCallsFromLLMInfoFrame(
+                function_calls=[
+                    FunctionCallFromLLM(
+                        function_name="next_node",
+                        tool_call_id="deferred-tool",
+                        arguments={},
+                        context=None,
+                    )
+                ]
+            )
+        )
+    )
+    await observer.on_push_frame(_pushed(LLMFullResponseEndFrame()))
+    assert sink.count(ev.LLM_RESPONSE_EMPTY) == 0
+
+    # Empty intent must not hide a genuinely silent response.
+    await observer.on_push_frame(_pushed(LLMFullResponseStartFrame()))
+    await observer.on_push_frame(
+        _pushed(FunctionCallsFromLLMInfoFrame(function_calls=[]))
+    )
+    await observer.on_push_frame(_pushed(LLMFullResponseEndFrame()))
+    assert sink.count(ev.LLM_RESPONSE_EMPTY) == 1
 
 
 async def test_tool_outside_llm_response_does_not_hide_later_empty_completion():
