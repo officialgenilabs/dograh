@@ -31,6 +31,7 @@ from pipecat.frames.frames import (
     ErrorFrame,
     FunctionCallCancelFrame,
     FunctionCallInProgressFrame,
+    FunctionCallsFromLLMInfoFrame,
     FunctionCallResultFrame,
     InputAudioRawFrame,
     InterimTranscriptionFrame,
@@ -295,6 +296,11 @@ class CallEventRecorder:
             chars = len(frame.text or "")
             self._llm_text_chars += chars
             self._llm_chars_since_turn += chars
+        elif isinstance(frame, FunctionCallsFromLLMInfoFrame):
+            # Providers publish their tool intent before asynchronous tool
+            # execution; this also covers tools deferred until speech ends.
+            if self._llm_open and frame.function_calls:
+                self._llm_has_tool_call = True
         elif isinstance(frame, LLMFullResponseEndFrame):
             self._llm_open = False
             # A tool-only completion is valid output, not a silent model
