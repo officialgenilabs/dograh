@@ -169,6 +169,66 @@ async def test_llm_response_without_text_is_reported_empty():
     assert ev.LLM_RESPONSE_EMPTY not in sink.names()
 
 
+async def test_tool_only_completion_does_not_raise_empty_llm_alarm():
+    sink = _RecordingSink()
+    observer = _observer(sink=sink)
+
+    await observer.on_push_frame(_pushed(LLMFullResponseStartFrame()))
+    await observer.on_push_frame(
+        _pushed(
+            FunctionCallInProgressFrame(
+                function_name="lookup_customer",
+                tool_call_id="call-tool-only",
+                arguments={},
+            )
+        )
+    )
+    # The tool can finish before the LLM completion closes. Remember that a
+    # tool was issued, rather than inspecting only in-flight tool calls.
+    await observer.on_push_frame(
+        _pushed(
+            FunctionCallResultFrame(
+                function_name="lookup_customer",
+                tool_call_id="call-tool-only",
+                arguments={},
+                result={"found": True},
+            )
+        )
+    )
+    await observer.on_push_frame(_pushed(LLMFullResponseEndFrame()))
+
+    assert sink.count(ev.FUNCTION_CALL_STARTED) == 1
+    assert sink.count(ev.FUNCTION_CALL_ENDED) == 1
+    assert sink.count(ev.LLM_RESPONSE_EMPTY) == 0
+    assert observer._llm_empty_responses == 0
+
+    # The next completion has no text AND no tool call. It must still alarm.
+    await observer.on_push_frame(_pushed(LLMFullResponseStartFrame()))
+    await observer.on_push_frame(_pushed(LLMFullResponseEndFrame()))
+
+    assert sink.count(ev.LLM_RESPONSE_EMPTY) == 1
+    assert observer._llm_empty_responses == 1
+
+
+async def test_tool_outside_llm_response_does_not_hide_later_empty_completion():
+    sink = _RecordingSink()
+    observer = _observer(sink=sink)
+
+    await observer.on_push_frame(
+        _pushed(
+            FunctionCallInProgressFrame(
+                function_name="background_lookup",
+                tool_call_id="outside-window",
+                arguments={},
+            )
+        )
+    )
+    await observer.on_push_frame(_pushed(LLMFullResponseStartFrame()))
+    await observer.on_push_frame(_pushed(LLMFullResponseEndFrame()))
+
+    assert sink.count(ev.LLM_RESPONSE_EMPTY) == 1
+
+
 async def test_function_call_hung_then_still_reports_the_true_duration():
     sink = _RecordingSink()
     observer = _observer(sink=sink)
