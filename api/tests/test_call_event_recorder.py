@@ -176,7 +176,7 @@ async def test_whitespace_only_llm_response_is_reported_empty():
     observer = _observer(sink=sink)
 
     await observer.on_push_frame(_pushed(LLMFullResponseStartFrame()))
-    await observer.on_push_frame(_pushed(LLMTextFrame(chr(10) + chr(9))))
+    await observer.on_push_frame(_pushed(LLMTextFrame("  ")))
     await observer.on_push_frame(_pushed(LLMTextFrame(chr(10) + chr(9))))
     await observer.on_push_frame(_pushed(LLMFullResponseEndFrame()))
 
