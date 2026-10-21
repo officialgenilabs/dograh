@@ -128,6 +128,7 @@ class CallEventRecorder:
         self._final_chars = 0
         self._llm_open = False
         self._llm_text_chars = 0
+        self._llm_has_tool_call = False
         self._llm_chars_since_turn = 0
         self._refusals_since_turn = 0
         self._tts_started_since_turn = False
@@ -289,16 +290,21 @@ class CallEventRecorder:
         elif isinstance(frame, LLMFullResponseStartFrame):
             self._llm_open = True
             self._llm_text_chars = 0
+            self._llm_has_tool_call = False
         elif isinstance(frame, LLMTextFrame):
             chars = len(frame.text or "")
             self._llm_text_chars += chars
             self._llm_chars_since_turn += chars
         elif isinstance(frame, LLMFullResponseEndFrame):
             self._llm_open = False
-            if self._llm_text_chars == 0:
+            # A tool-only completion is valid output, not a silent model
+            # response. The tool may already have finished before this frame.
+            if self._llm_text_chars == 0 and not self._llm_has_tool_call:
                 self._llm_empty_responses += 1
                 self._emit(ev.LLM_RESPONSE_EMPTY, severity=ev.SEVERITY_WARN)
         elif isinstance(frame, FunctionCallInProgressFrame):
+            if self._llm_open:
+                self._llm_has_tool_call = True
             self._function_call_started(frame)
         elif isinstance(frame, FunctionCallResultFrame):
             self._function_call_finished(frame, cancelled=False)
