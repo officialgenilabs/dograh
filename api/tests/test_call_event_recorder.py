@@ -176,8 +176,8 @@ async def test_whitespace_only_llm_response_is_reported_empty():
     observer = _observer(sink=sink)
 
     await observer.on_push_frame(_pushed(LLMFullResponseStartFrame()))
-    await observer.on_push_frame(_pushed(LLMTextFrame("  ")))
-    await observer.on_push_frame(_pushed(LLMTextFrame("\\n\\t")))
+    await observer.on_push_frame(_pushed(LLMTextFrame(chr(10) + chr(9))))
+    await observer.on_push_frame(_pushed(LLMTextFrame(chr(10) + chr(9))))
     await observer.on_push_frame(_pushed(LLMFullResponseEndFrame()))
 
     assert sink.count(ev.LLM_RESPONSE_EMPTY) == 1
@@ -189,7 +189,7 @@ async def test_text_after_whitespace_is_not_reported_empty():
     observer = _observer(sink=sink)
 
     await observer.on_push_frame(_pushed(LLMFullResponseStartFrame()))
-    await observer.on_push_frame(_pushed(LLMTextFrame("\\n ")))
+    await observer.on_push_frame(_pushed(LLMTextFrame(chr(10) + " ")))
     await observer.on_push_frame(_pushed(LLMTextFrame("Hello")))
     await observer.on_push_frame(_pushed(LLMFullResponseEndFrame()))
 
