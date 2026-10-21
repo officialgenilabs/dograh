@@ -293,9 +293,12 @@ class CallEventRecorder:
             self._llm_text_chars = 0
             self._llm_has_tool_call = False
         elif isinstance(frame, LLMTextFrame):
-            chars = len(frame.text or "")
-            self._llm_text_chars += chars
-            self._llm_chars_since_turn += chars
+            text = frame.text or ""
+            # Whitespace-only deltas are not a speakable answer. Keep the
+            # full emitted length for turn diagnostics, but require at least
+            # one non-whitespace character before declaring LLM output.
+            self._llm_text_chars += len(text.strip())
+            self._llm_chars_since_turn += len(text)
         elif isinstance(frame, FunctionCallsFromLLMInfoFrame):
             # Providers publish their tool intent before asynchronous tool
             # execution; this also covers tools deferred until speech ends.
